@@ -5,7 +5,9 @@
 function[u_X_n, u_Y_n, particles_X, particles_Y, v_X_p, v_Y_p,...
     v_X_n, v_Y_n, mass_p,u_X_p, u_Y_p,...
     E_kin,E_pot,E_grav,E_trac,...
-    stress_p,strain_p,N_vec, B_vec_X, B_vec_Y] = ...
+    stress11_p,stress12_p,stress21_p,stress22_p, ...
+    strain11_p,strain12_p,strain21_p,strain22_p, ...
+    N_vec, B_vec_X, B_vec_Y, volume_p] = ...
     MPM_2D_B_spline(constant,flag,n_dof,n_triangles,...
     n_particles,particles_X,particles_Y,vertices_X,vertices_Y,triangles,...
     area_weight, velocity_X_func, velocity_Y_func,t_step,n_time_steps)
@@ -16,46 +18,97 @@ function[u_X_n, u_Y_n, particles_X, particles_Y, v_X_p, v_Y_p,...
 %Ordinates, otherwise use standard Lagrange basis tent functions
 if flag.spline_basis==1
     [PS_tri_X,PS_tri_Y,B_o_X,B_o_Y,B_o] = ...
-        Basis_functions_Bezier_ordinates(vertices_X,vertices_Y,triangles);
+        Basis_functions_Bezier_ordinates(vertices_X,vertices_Y,...
+        triangles,flag);
 end
 
-elements_particles = pointLocation(triangles,...
-    particles_X(:,1),particles_Y(:,1));                                     % Triangle where particle is located
+% figure(1)
+% scatter(Q_X(v,:),Q_Y(v,:),'filled')
+
+%Find Gauss points in the refined grid in case of Gauss Points
+if flag.Gauss_integration ==1
+    if flag.spline_basis ==1
+        %Find the Gauss points in the refined triangulation. The refined
+        %triangulation still has to be constructed though, so this is done
+        %first.
+        %Each subtriangle has the vertices with Bezier coordinate numbers
+        %1,3 and 5  (2, 4 and 6 are halfway on the edges)
+        ST_PointsX=permute(B_o_X(:,:,[1,3,5]),[3,2,1]);
+        ST_PointsX=reshape(ST_PointsX,[],1);
+        ST_PointsY=permute(B_o_Y(:,:,[1,3,5]),[3,2,1]);
+        ST_PointsY=reshape(ST_PointsY,[],1);
+        ST_ConnectivityList=( [1:3:3*6*n_triangles;...
+                               2:3:3*6*n_triangles;...
+                               3:3:3*6*n_triangles ]' );
+        SubTriangles=triangulation(ST_ConnectivityList,...
+            ST_PointsX,ST_PointsY);
+        [GaussPoints_X,GaussPoints_Y,Gauss_weight]=...
+            Gauss_Points(SubTriangles);
+        GaussPoints_X=reshape(GaussPoints_X',[],1);
+        GaussPoints_Y=reshape(GaussPoints_Y',[],1);
+        Gauss_weight=reshape(Gauss_weight',[],1);
+    else
+        %Find the Gauss points in the original triangulation
+        [GaussPoints_X,GaussPoints_Y,Gauss_weight]=...
+        Gauss_Points(triangles);
+        GaussPoints_X=reshape(GaussPoints_X',[],1);
+        GaussPoints_Y=reshape(GaussPoints_Y',[],1);
+        Gauss_weight=reshape(Gauss_weight',[],1);
+    end
+end
+
+
+if flag.Gauss_integration == 1
+    %Plot Gauss points
+    hold on
+    scatter(GaussPoints_Y,GaussPoints_X)
+end
 
 % Initial particle properties
-volume_p = area_weight;                                                     % Volume of particle
+volume_p=zeros(n_particles,n_time_steps);
+volume_p(:,1) = area_weight;                                                % Volume of particle
 density_p = constant.density*ones(n_particles,1);                           % Density of particle
-mass_p = volume_p.*density_p;                                               % Mass of particle
-f_grav_p = mass_p*constant.g;                                               % Gravitational force particle
-f_trac_p = zeros(n_particles,1);                                            % Traction force particle
-f_trac_p(end) = constant.load;                                              % Application load
+mass_p = volume_p(:,1).*density_p;                                          % Mass of particle
 
 % Vectors to store information
 %stress_p(i,j,p,t)=sigma_{i,j} of particle p at time T_t.
-stress_p = zeros(constant.dim,constant.dim,n_particles,n_time_steps);       % Particle stress
-strain_p = zeros(constant.dim,constant.dim,n_particles,n_time_steps);       % Particle strain
+% Particle stress
+stress11_p = zeros(n_particles,n_time_steps);
+stress12_p = zeros(n_particles,n_time_steps);
+stress21_p = zeros(n_particles,n_time_steps);
+stress22_p = zeros(n_particles,n_time_steps);
+% Particle strain
+strain11_p = zeros(n_particles,n_time_steps);
+strain12_p = zeros(n_particles,n_time_steps);
+strain21_p = zeros(n_particles,n_time_steps);
+strain22_p = zeros(n_particles,n_time_steps);
 
 v_X_p = zeros(n_particles, n_time_steps-1);                                 % Particle velocity     
 v_Y_p = zeros(n_particles, n_time_steps-1);                                 % Particle velocity 
-v_X_p(:,1) = velocity_X_func(particles_X(:,1),particles_Y(:,1),0);          % Initial particle velocity    
-v_Y_p(:,1) = velocity_Y_func(particles_X(:,1),particles_Y(:,1),0);          % Initial particle velocity    
+v_X_p(:,1) = velocity_X_func(particles_X(:,1),particles_Y(:,1));            % Initial particle velocity    
+v_Y_p(:,1) = velocity_Y_func(particles_X(:,1),particles_Y(:,1));            % Initial particle velocity    
 
-v_X_n = zeros(n_dof, n_time_steps-1);
-v_Y_n = zeros(n_dof, n_time_steps-1);
+v_X_n = zeros(n_dof, n_time_steps);
+v_Y_n = zeros(n_dof, n_time_steps);
 
-u_X_n = zeros(n_dof, n_time_steps-1);                                       % Displacement DOF
+a_X_n = zeros(n_dof, 1);
+a_Y_n = zeros(n_dof, 1);
+
+u_X_n = zeros(n_dof, n_time_steps);                                         % Displacement DOF
 u_X_n(:,1) = zeros(n_dof,1);                                                % Initial displacement at DOF
-u_Y_n = zeros(n_dof, n_time_steps-1);                                       % Displacement DOF
+u_Y_n = zeros(n_dof, n_time_steps);                                         % Displacement DOF
 u_Y_n(:,1) = zeros(n_dof,1);                                                % Initial displacement at DOF
 
-u_X_p = zeros(n_particles, n_time_steps-1);                                 % Displacement particles
+u_X_p = zeros(n_particles, n_time_steps);                                   % Displacement particles
 u_X_p(:,1) = zeros(n_particles,1);                                          % Initial displacement particles
-u_Y_p = zeros(n_particles, n_time_steps-1);                                 % Displacement particles
+u_Y_p = zeros(n_particles, n_time_steps);                                   % Displacement particles
 u_Y_p(:,1) = zeros(n_particles,1);                                          % Initial displacement particles
 
 E_kin_X=zeros(1,n_time_steps);
+E_kin_X(1,1)=sum(density_p.*area_weight.*v_X_p(:,1));
 E_kin_Y=zeros(1,n_time_steps);
 E_kin  =zeros(1,n_time_steps);
+E_kin(1,1)=E_kin_X(1,1)+E_kin_Y(1,1);
 E_pot_X=zeros(1,n_time_steps);
 E_pot_Y=zeros(1,n_time_steps);
 E_pot  =zeros(1,n_time_steps);
@@ -94,43 +147,192 @@ K=constant.E/( 3*(1-2*constant.Poisson_ratio) );
 %Shear modulus
 G=constant.E/( 2*(1+  constant.Poisson_ratio) );
 
+
+%In case of Gauss integration, the integration points do not move, and the
+%values of the basis functions only have to be calculated once
+if flag.Gauss_integration==1
+    %N_vec_gp(gp,n) contains the value of basis function n in Gauss point gp.
+    %Likewise for the derivative of the basis function to X and Y in
+    %B_vec_X/Y.
+    if flag.spline_basis==1
+        [N_vec_gp, B_vec_X_gp, B_vec_Y_gp, ~ ]=value_Bspline2D(...
+            B_o_X,B_o_Y,B_o,GaussPoints_X,GaussPoints_Y,...
+            triangles,n_triangles,n_dof); 
+    else
+        [N_vec_gp, B_vec_X_gp, B_vec_Y_gp, ~ ] = ...
+            value_triangularBasis(GaussPoints_X,GaussPoints_Y,triangles);
+    end
+end
+
 %% Time integration
 
 for s=1:n_time_steps-1
+    fprintf('s = %i \n', s)
+%     if s == 269
+%     end
+%     if s == 174
+%         s
+%     end
+%     if s==130
+%     end
+%     if s == 100
+%     end
+%     if s == 1377
+%     end
+%     if s == 9%890
+%     end
+    
     %N_vec(p,n) contains the value of basis function n in point p. Likewise
     %for the derivative of the basis function to X and Y in B_vec_X/Y.
     if flag.spline_basis==1
-        [N_vec, B_vec_X, B_vec_Y]=value_Bspline2D(B_o_X,B_o_Y,B_o,...
-            particles_X(:,s),particles_Y(:,s),triangles,n_triangles,n_dof);                      % Function values at particle positions
+        [N_vec, B_vec_X, B_vec_Y, nodes_active,triangles_active]=...
+            value_Bspline2D(...
+            B_o_X,B_o_Y,B_o,...
+            particles_X(:,s),particles_Y(:,s),triangles,n_triangles,...
+            n_dof); 
     else
-        [N_vec, B_vec_X, B_vec_Y] = ...
+        [N_vec, B_vec_X, B_vec_Y, nodes_active,triangles_active] = ...
             value_triangularBasis(particles_X(:,s),particles_Y(:,s),...
-            n_particles,triangles);
+            triangles);
     end
+    
+    if flag.DisableNodes == 1
+        M_cons = N_vec'*(((area_weight.*density_p)*ones(1,n_dof)).*N_vec);
+        nodes_zero_mass=find(diag(M_cons<=1e-2));
+        %Filter out nodes that have hardly any mass
+        nodes_active=setdiff(nodes_active,nodes_zero_mass);
+    end
+    
+%     if ~any(nodes_active==55)
+%         disp('node 55 not active')
+%     end
+%     if ~any(nodes_active==56)
+%         disp('node 56 not active')
+%     end
+%     if ~any(nodes_active==57)
+%         disp('node 57 not active')
+%     end
+    
+    %Find the active vertices and triangles
+    vertices_active = unique(ceil(nodes_active/3));
+    vertices_inactive = setdiff(1:length(vertices_X),vertices_active);
+    triangles_inactive = setdiff(1:n_triangles,triangles_active);
+    vertices_active_boundary = setdiff(...
+        unique(triangles.ConnectivityList(triangles_inactive,:)),...
+        vertices_inactive);
+    vertices_active_boundary = reshape(vertices_active_boundary,[],1);
+    triangles_at_boundary = find(sum(ismember(...
+                                         triangles.ConnectivityList,...
+                                         vertices_active_boundary),2));
+    triangles_active_boundary = setdiff(triangles_at_boundary,...
+                                        triangles_inactive);
+    particles_in_boundary_triangles = find(ismember(...
+        pointLocation(triangles,particles_X(:,s),particles_Y(:,s)),...
+        triangles_active_boundary));
+    
+    if s==114
+    end
+    %Find nodes from vertices
+    if flag.spline_basis == 1   %PS-splines has 3 nodes per vertex
+        if ~isempty(vertices_active_boundary)
+            nodes_active_boundary=3*repmat(vertices_active_boundary',[3,1])...
+                + [1;2;3]*ones(1,length(vertices_active_boundary)) -3;
+            nodes_active_boundary = reshape(nodes_active_boundary,[],1);
+        end
+    else    %For Lagrange MPM, the vertices correspond to the nodes
+        nodes_active_boundary = vertices_active_boundary;
+    end
+    
     
     %Calculate the Mass matrix as \int(phi_i*rho*phi_j)
     %This can be approximated as Sum_n [w_n*(phi_i*rho*phi_j)|_{x_n}]
-    
-    M=zeros(n_dof);
-    
     %Calculate the mass matrix by 
-    M=N_vec'*(((area_weight.*density_p)*ones(1,n_dof)).*N_vec);
+    if flag.lumped == 0     %Consistent system
+        M = N_vec'*(((area_weight.*density_p)*ones(1,n_dof)).*N_vec);
+    elseif flag.lumped == 2     %Partial lumping
+        M = N_vec'*(((area_weight.*density_p)*ones(1,n_dof)).*N_vec);
+        M(nodes_active_boundary,:)=0;
+        M(nodes_active_boundary,nodes_active_boundary) = ...
+            diag(N_vec(:,nodes_active_boundary)'*(area_weight.*density_p));
+    else    %Lumping
+        M = diag(N_vec'*(area_weight.*density_p));
+        M_cons = N_vec'*(((area_weight.*density_p)*ones(1,n_dof)).*N_vec);
+        
+%         figure; surf(M); title('M')
+    end        
     
-%     %Here an alternative way for making the mass matrix, that is by first
-%     %constructing a spline through the particle points and calculate the
-%     %density mass of the basis functions in gauss points and then integrate
-%     
-%     
-%     
-%     
-    
-    %Force vectors in the degrees of freedom, see page 11 of Roel's thesis
+    %Gravitational force in the degrees of freedom
     F_grav_X_n = N_vec'*(area_weight.*density_p*constant.g);
-    F_grav_Y_n = zeros(n_dof,1);
-    F_int_X_n = B_vec_X'*(area_weight.*squeeze(stress_p(1,1,:,s)))+...
-              B_vec_Y'*(area_weight.*squeeze(stress_p(2,1,:,s)));
-    F_int_Y_n = B_vec_X'*(area_weight.*squeeze(stress_p(1,2,:,s)))+...
-              B_vec_Y'*(area_weight.*squeeze(stress_p(2,2,:,s)));
+    F_grav_Y_n = zeros(n_dof,1);  
+    
+    %Stress tensors in the degrees of freedom, see page 11 of Roel's thesis
+    if flag.Gauss_integration == 1
+        if flag.TLS == 1    %Use Taylor Least Squares reconstruction
+            conservation = 0;   %No conservation for sigma
+            stress11_gp=interpolate_TLS(particles_X(:,s),particles_Y(:,s),...
+                stress11_p(:,s),volume_p,GaussPoints_X,GaussPoints_Y,...
+                Gauss_weight,triangles_active_boundary, ...
+                triangles_inactive, triangles,conservation);
+            stress12_gp=interpolate_TLS(particles_X(:,s),particles_Y(:,s),...
+                stress12_p(:,s),volume_p,GaussPoints_X,GaussPoints_Y,...
+                Gauss_weight,triangles_active_boundary, ...
+                triangles_inactive, triangles,conservation);
+            stress21_gp=interpolate_TLS(particles_X(:,s),particles_Y(:,s),...
+                stress21_p(:,s),volume_p,GaussPoints_X,GaussPoints_Y,...
+                Gauss_weight,triangles_active_boundary, ...
+                triangles_inactive, triangles,conservation);
+            stress22_gp=interpolate_TLS(particles_X(:,s),particles_Y(:,s),...
+                stress22_p(:,s),volume_p,GaussPoints_X,GaussPoints_Y,...
+                Gauss_weight,triangles_active_boundary, ...
+                triangles_inactive, triangles,conservation);
+            
+            %In the inactive elements and the boundary elements, the values
+            %in the gauss points are set to zero. In the boundary elements,
+            %the integration is done with the original particles
+            B_vec_X_temp = [B_vec_X_gp;...
+                            B_vec_X(particles_in_boundary_triangles,:)];
+            B_vec_Y_temp = [B_vec_Y_gp;...
+                            B_vec_Y(particles_in_boundary_triangles,:)];
+            weight_temp = [Gauss_weight;...
+                           volume_p(particles_in_boundary_triangles)];
+            stress11_temp = [stress11_gp;...
+                             stress11_p(particles_in_boundary_triangles,s)];
+            stress12_temp = [stress12_gp;...
+                             stress12_p(particles_in_boundary_triangles,s)];
+            stress21_temp = [stress21_gp;...
+                             stress21_p(particles_in_boundary_triangles,s)];
+            stress22_temp = [stress22_gp;...
+                             stress22_p(particles_in_boundary_triangles,s)];
+
+            F_int_X_n = B_vec_X_temp'*(weight_temp.*stress11_temp)+...
+                        B_vec_Y_temp'*(weight_temp.*stress21_temp);
+            F_int_Y_n = B_vec_X_temp'*(weight_temp.*stress12_temp)+...
+                        B_vec_Y_temp'*(weight_temp.*stress22_temp);
+        else    %Use cubic spline reconstruction
+            f_stress11=scatteredInterpolant(particles_X(:,s),...
+                particles_Y(:,s),stress11_p(:,s),'linear','nearest');
+            stress11_gp = f_stress11(GaussPoints_X,GaussPoints_Y);
+            f_stress12=scatteredInterpolant(particles_X(:,s),...
+                particles_Y(:,s),stress12_p(:,s),'linear','nearest');
+            stress12_gp = f_stress12(GaussPoints_X,GaussPoints_Y);
+            f_stress21=scatteredInterpolant(particles_X(:,s),...
+                particles_Y(:,s),stress21_p(:,s),'linear','nearest');
+            stress21_gp = f_stress21(GaussPoints_X,GaussPoints_Y);
+            f_stress22=scatteredInterpolant(particles_X(:,s),...
+                particles_Y(:,s),stress22_p(:,s),'linear','nearest');
+            stress22_gp = f_stress22(GaussPoints_X,GaussPoints_Y);
+            
+            F_int_X_n = B_vec_X_gp'*(Gauss_weight.*stress11_gp)+...
+                        B_vec_Y_gp'*(Gauss_weight.*stress21_gp);
+            F_int_Y_n = B_vec_X_gp'*(Gauss_weight.*stress12_gp)+...
+                        B_vec_Y_gp'*(Gauss_weight.*stress22_gp);
+        end
+    else
+        F_int_X_n = B_vec_X'*(area_weight.*stress11_p(:,s))+...
+                    B_vec_Y'*(area_weight.*stress21_p(:,s));
+        F_int_Y_n = B_vec_X'*(area_weight.*stress12_p(:,s))+...
+                    B_vec_Y'*(area_weight.*stress22_p(:,s));
+    end
     
     %Traction force on particles. When present, this is only applied to
     %particles at the top of the domain.
@@ -153,6 +355,8 @@ for s=1:n_time_steps-1
     % Calculate the nodal acceleration with boundary conditions
     % Apply boundary condition on nodal acceleration  
     M_a=M;
+%     M_a=M_cons;
+
     F_X_a=F_X_n;
     F_Y_a=F_Y_n;
     
@@ -171,27 +375,182 @@ for s=1:n_time_steps-1
     
     %Top and bottom have a free slip BC for the x-direction
     M_ax=M_a;
-
-    %Add top and bottom Dirichlet boundary condtion for y-direction
+    
+    %Add top and bottom Dirichlet boundary condtion for y-acceleration
     M_ay=M_a;
     M_ay(dof_bt,:)=0;
     M_ay(:,dof_bt)=0;
     M_ay(dof_bt,dof_bt)=eye(length(dof_bt));
     F_Y_a(dof_bt)=0;
     
-    a_X_n = M_ax\F_X_a;
-    a_Y_n = M_ay\F_Y_a;
+    %Remove inactive elements
+    M_ax=M_ax(nodes_active,nodes_active);
+    F_X_a=F_X_a(nodes_active);
+    M_ay=M_ay(nodes_active,nodes_active);
+    F_Y_a=F_Y_a(nodes_active);
+    
+%     if numel(nodes_active)~=3*length(vertices_X)
+%         disp('There is an inactive node')
+%         fprintf('at s = %i \n', s)
+%     end
+    
+    %Solve for the acceleration in the degrees of freedom    
+    if flag.lumped == 0     %Consistent system
+        a_X_n(nodes_active) = M_ax\F_X_a;
+        a_Y_n(nodes_active) = M_ay\F_Y_a;
+    elseif flag.lumped == 2     %Boundary nodes are lumped
+        a_X_n(nodes_active) = M_ax\F_X_a;
+        a_Y_n(nodes_active) = M_ay\F_Y_a;
+    else    %Normal lumping
+        a_X_n(nodes_active) = F_X_a./diag(M_ax);
+        a_Y_n(nodes_active) = F_Y_a./diag(M_ay);
+        
+%         a_X_n(nodes_active) = M_ax\F_X_a;
+%         a_Y_n(nodes_active) = M_ay\F_Y_a;
+    end
 
+    
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %Plot the projection of the acceleration
+    if mod(s,ceil(n_time_steps/10))==1
+    [X,Y]=meshgrid((0.01:99.01)*constant.length/100,...
+        (1:19)*constant.width/20);
+    if (flag.spline_basis==1)
+        [Z,~,~,~]=value_Bspline2D(B_o_X,B_o_Y,B_o,...
+            reshape(X,[],1),reshape(Y,[],1),triangles,n_triangles,n_dof);
+    else
+        [Z, ~ , ~,~] = ...
+            value_triangularBasis(reshape(X,[],1),reshape(Y,[],1),triangles);
+    end
+%     Z=reshape(Z*a_X_n,size(X));
+    Z=reshape(Z*a_X_n,size(X));
+    
+    k=ceil(s/round(n_time_steps/10));
+    figure(9)
+    subplot(2,5,k)
+    surf(X,Y,Z,'EdgeColor','none');
+    title(sprintf('a_n, t = %.3f', s*t_step))
+%     axis([0 constant.length 0 constant.width -1 1])
+    end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
     % Update particle velocity
     v_X_p(:,s+1) = v_X_p(:,s) + t_step*(N_vec*a_X_n);
     v_Y_p(:,s+1) = v_Y_p(:,s) + t_step*(N_vec*a_Y_n);
     
     % Calculate updated momentum (mass*velocity P=M*v) in active elements
-    P_X_n = N_vec'*(volume_p.*density_p.*v_X_p(:,s+1));
-    P_Y_n = N_vec'*(volume_p.*density_p.*v_Y_p(:,s+1));
+    if flag.Gauss_integration == 1
+        if flag.TLS == 1
+            conservation = 0;
+            if flag.Cubic_TLS == 0
+                %Quadratic
+                P_X_gp=interpolate_TLS(particles_X(:,s),particles_Y(:,s),...
+                    v_X_p(:,s+1).*density_p,volume_p,GaussPoints_X,...
+                    GaussPoints_Y,Gauss_weight,triangles_active_boundary, ...
+                    triangles_inactive, triangles,conservation);
+                P_Y_gp=interpolate_TLS(particles_X(:,s),particles_Y(:,s),...
+                    v_Y_p(:,s+1).*density_p,volume_p,GaussPoints_X,...
+                    GaussPoints_Y,Gauss_weight,triangles_active_boundary, ...
+                    triangles_inactive, triangles,conservation);
+                density_gp=interpolate_TLS(particles_X(:,s),particles_Y(:,s),...
+                    density_p,volume_p,GaussPoints_X,GaussPoints_Y,...
+                    Gauss_weight,triangles_active_boundary, ...
+                    triangles_inactive, triangles,conservation);
+            else
+                %Cubic
+                P_X_gp=interpolate_TLS_cubic(particles_X(:,s),particles_Y(:,s),...
+                    v_X_p(:,s+1).*density_p,volume_p,GaussPoints_X,...
+                    GaussPoints_Y,Gauss_weight,triangles_active_boundary, ...
+                    triangles_inactive, triangles,conservation);
+                P_Y_gp=interpolate_TLS_cubic(particles_X(:,s),particles_Y(:,s),...
+                    v_Y_p(:,s+1).*density_p,volume_p,GaussPoints_X,...
+                    GaussPoints_Y,Gauss_weight,triangles_active_boundary, ...
+                    triangles_inactive, triangles,conservation);
+                density_gp=interpolate_TLS_cubic(particles_X(:,s),particles_Y(:,s),...
+                    density_p,volume_p,GaussPoints_X,GaussPoints_Y,...
+                    Gauss_weight,triangles_active_boundary, ...
+                    triangles_inactive, triangles,conservation);
+            end
+            
+            %In the inactive elements and the boundary elements, the values
+            %in the gauss points are set to zero. In the boundary elements,
+            %the integration is done with the original particles
+            N_vec_temp = [N_vec_gp;...
+                          N_vec(particles_in_boundary_triangles,:)];
+            weight_temp = [Gauss_weight;...
+                           volume_p(particles_in_boundary_triangles)];
+            P_X_temp = [P_X_gp;...
+                        v_X_p(particles_in_boundary_triangles,s+1).*...
+                        density_p(particles_in_boundary_triangles)];
+            P_Y_temp = [P_Y_gp;...
+                        v_Y_p(particles_in_boundary_triangles,s+1).*...
+                        density_p(particles_in_boundary_triangles)];
+            density_temp = [density_gp;...
+                            density_p(particles_in_boundary_triangles)];
+            F_int_X_n = B_vec_X_temp'*(weight_temp.*stress11_temp)+...
+                        B_vec_Y_temp'*(weight_temp.*stress21_temp);
+            F_int_Y_n = B_vec_X_temp'*(weight_temp.*stress12_temp)+...
+                        B_vec_Y_temp'*(weight_temp.*stress22_temp);
+            
+            P_X_n = N_vec_temp'*(weight_temp.*P_X_temp);
+            P_Y_n = N_vec_temp'*(weight_temp.*P_Y_temp);
 
+            M_gp = N_vec_temp'*(((weight_temp.*density_temp)*...
+                                ones(1,n_dof)).*N_vec_temp);  
+            
+        else 
+%             f_v_X=scatteredInterpolant(particles_X(:,s),...
+%                 particles_Y(:,s),v_X_p(:,s+1),'nearest','nearest');
+%             v_X_gp = f_v_X(GaussPoints_X,GaussPoints_Y);
+%             f_v_Y=scatteredInterpolant(particles_X(:,s),...
+%                 particles_Y(:,s),v_Y_p(:,s+1),'nearest','nearest');
+%             v_Y_gp = f_v_Y(GaussPoints_X,GaussPoints_Y);
+            f_P_X=scatteredInterpolant(particles_X(:,s),...
+                particles_Y(:,s),v_X_p(:,s+1).*density_p,...
+                'linear','nearest');
+            P_X_gp = f_P_X(GaussPoints_X,GaussPoints_Y);
+            f_P_Y=scatteredInterpolant(particles_X(:,s),...
+                particles_Y(:,s),v_Y_p(:,s+1).*density_p,...
+                'linear','nearest');
+            P_Y_gp = f_P_Y(GaussPoints_X,GaussPoints_Y);
+            
+            f_density=scatteredInterpolant(particles_X(:,s),...
+                particles_Y(:,s),density_p,'linear','nearest');
+            density_gp = f_density(GaussPoints_X,GaussPoints_Y);
+            
+            P_X_n = N_vec_gp'*(Gauss_weight.*P_X_gp);
+            P_Y_n = N_vec_gp'*(Gauss_weight.*P_Y_gp);
+
+            M_gp = N_vec_gp'*(((Gauss_weight.*density_gp)*...
+                                ones(1,n_dof)).*N_vec_gp);  
+        end
+        
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%         %plot the projection of the density
+%         if mod(s,ceil(n_time_steps/10))==1
+%         figure(12)
+%         subplot(2,5,k)
+%         surf(X,Y,Z,'EdgeColor','none');
+%         title(sprintf('\rho_n, t = %.3f', s*t_step))
+%         scatter3(GaussPoints_X,GaussPoints_Y,density_gp,100,...
+%                 density_gp,'filled');
+%         end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    else
+        P_X_n = N_vec'*(volume_p(:,s).*density_p.*v_X_p(:,s+1));
+        P_Y_n = N_vec'*(volume_p(:,s).*density_p.*v_Y_p(:,s+1));
+    end
+    
     %Project the updated velocity onto the active elements
-    M_v=M;
+    %First, make a copy of the mass matrix and momentum vectors for adding
+    %boundary conditions
+    if flag.Gauss_integration == 1
+        M_v = M_gp;
+    else
+        M_v=M;
+%         M_v = M_cons;
+    end
+    
     P_X_n_v=P_X_n;
     P_Y_n_v=P_Y_n;
     
@@ -218,56 +577,117 @@ for s=1:n_time_steps-1
     M_vy(dof_bt,dof_bt)=eye(length(dof_bt));
     P_Y_n_v(dof_bt)=0;
     
-    v_X_n(:,s+1) = M_vx\P_X_n_v;
-    v_Y_n(:,s+1) = M_vy\P_Y_n_v;
-    
+    %Remove inactive elements
+    M_vx=M_vx(nodes_active,nodes_active);
+    P_X_n_v=P_X_n_v(nodes_active);
+    M_vy=M_vy(nodes_active,nodes_active);
+    P_Y_n_v=P_Y_n_v(nodes_active);
+        
+    %Solve for the new nodal velocities
+    if flag.lumped == 0    %Consistent system
+        v_X_n(nodes_active,s+1) = M_vx\P_X_n_v;
+        v_Y_n(nodes_active,s+1) = M_vy\P_Y_n_v;
+    elseif flag.lumped == 2     %Boundary nodes are lumped
+        v_X_n(nodes_active,s+1) = M_vx\P_X_n_v;
+        v_Y_n(nodes_active,s+1) = M_vy\P_Y_n_v;
+    else     %Normal lumping
+        v_X_n(nodes_active,s+1) = P_X_n_v./diag(M_vx);
+        v_Y_n(nodes_active,s+1) = P_Y_n_v./diag(M_vy);
+%         v_X_n(nodes_active,s+1) = M_vx\P_X_n_v;
+%         v_Y_n(nodes_active,s+1) = M_vy\P_Y_n_v;
+    end
 
+%     %Compare consistent and lumped velocity in the nodes    
+%     v_X_n_cons = M_vx\P_X_n_v;
+    v_X_n_lump = P_X_n_v./diag(M_ax);
+%     
+%     if mod(s,ceil(n_time_steps/10))==1
+%         figure;
+%         hold on
+%         plot(v_X_n_cons)
+%         plot(v_X_n_lump)
+%     end
     
+%     %Compare consistent and lumped acceleration in the nodes
+%     a_X_n_cons = M_vx\F_X_a;
+%     a_X_n_lump = M_ax\F_X_a;
 %     
-%     %plot the projection of the velocity
-%     [X,Y]=meshgrid(0:constant.length/100:constant.length,...
-%         0:constant.length/20:constant.width);
-%     [Z,~,~]=value_Bspline2D(B_o_X,B_o_Y,B_o,...
-%             reshape(X,[],1),reshape(Y,[],1),triangles,n_triangles,n_dof);
-%     Z=Z*
-%         
-%     scatter(X,Y,Z);
-%     
-%     
+%     figure;
+%     hold on
+%     plot(a_X_n_cons)
+%     plot(a_X_n_lump)
+%     hold off
+%     legend('consistent','lumped')
+%     disp(s)
+    
+    
+    
+    
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %plot the projection of the velocity
+    if mod(s,ceil(n_time_steps/10))==1
+    [X,Y]=meshgrid((0.01:99.01)*constant.length/100,...
+        (1:19)*constant.width/20);
+    if (flag.spline_basis==1)
+        [Z,~,~,~]=value_Bspline2D(B_o_X,B_o_Y,B_o,...
+            reshape(X,[],1),reshape(Y,[],1),triangles,n_triangles,n_dof);
+    else
+        [Z, ~ , ~, ~] = ...
+            value_triangularBasis(reshape(X,[],1),reshape(Y,[],1),triangles);
+    end
+%     Z=reshape(Z*v_X_n(:,s+1),size(X));
+    Z=reshape(Z(:,nodes_active)*v_X_n_lump,size(X));
+    
+    k=ceil(s/round(n_time_steps/10));
+    figure(10)
+    subplot(2,5,k)
+    surf(X,Y,Z,'EdgeColor','none');
+    title(sprintf('v_n, t = %.3f', s*t_step))
+%     axis([0 constant.length 0 constant.width -1 1])
+    disp('')
+    
+    figure(11)
+    subplot(2,5,k)
+    scatter3(particles_X(:,s),particles_Y(:,s),v_X_p(:,s),100,...
+        v_X_p(:,s),'filled')
+    title(sprintf('v_p, t = %.3f', s*t_step))
+    end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
        
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %For checking how the projection works out                            %
-    if s==1%n_time_steps-1                                                %
-    resol=20;                                                             %
-    figure                                                                %
-    [xq,yq] = meshgrid(0:constant.length/resol:constant.length,...        %
-        0:constant.width/resol:constant.width);                           %
-    F = scatteredInterpolant(particles_X(:,s),...                         %
-        particles_Y(:,s),v_X_p(:,s),'nearest');                           %
-    z1=F(xq,yq);                                                          %
-    plot3(particles_X(:,s),particles_Y(:,s),v_X_p(:,s),'mo')              %
-    hold on                                                               %
-    mesh(xq,yq,z1)                                                        %
-    title('Nearest Neighbor')                                             %
-    legend('Sample Points','Interpolated Surface','Location','NorthWest') %
-                                                                          %
-    figure                                                                %
-    if flag.spline_basis==1                                               %
-        [N_vec2, B_vec2, ~]=value_Bspline2D(B_o_X,B_o_Y,B_o,...           %
-            reshape(xq,[],1),reshape(yq,[],1),triangles,...               %
-            n_triangles,n_dof);                                           %
-    else                                                                  %
-        [N_vec2, B_vec2, ~]=value_triangularBasis(...                     %
-            reshape(xq,[],1),reshape(yq,[],1),numel(xq),triangles);       %
-    end                                                                   %
-    z2=reshape(N_vec2*v_X_n(:,s+1),size(xq));                             %
-%     z2=reshape(N_vec2*[zeros(12,1);1;zeros(n_dof-1-12,1)],size(xq));    %
-    mesh(xq,yq,z2)                                                        %
-    vel_X_exact2=velocity_X_func(xq,yq,s*t_step);                         %
-    L2_error=1/resol^2*sum(sum(abs(z2-vel_X_exact2)));                    %
-    fprintf('The L2 error is %.1e ', L2_error);                           %
-    end                                                                   %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%     %Plot the velocity projection and calculate the L2-error              %
+%     if s==1%n_time_steps-1                                                %
+%     resol=20;                                                             %
+%     figure                                                                %
+%     [xq,yq] = meshgrid(0:constant.length/resol:constant.length,...        %
+%         0:constant.width/resol:constant.width);                           %
+%     F = scatteredInterpolant(particles_X(:,s),...                         %
+%         particles_Y(:,s),v_X_p(:,s),'nearest');                           %
+%     z1=F(xq,yq);                                                          %
+%     plot3(particles_X(:,s),particles_Y(:,s),v_X_p(:,s),'mo')              %
+%     hold on                                                               %
+%     mesh(xq,yq,z1)                                                        %
+%     title('Nearest Neighbor')                                             %
+%     legend('Sample Points','Interpolated Surface','Location','NorthWest') %
+%                                                                           %
+%     figure                                                                %
+%     if flag.spline_basis==1                                               %
+%         [N_vec2, ~, ~,~]=value_Bspline2D(B_o_X,B_o_Y,B_o,...                %
+%             reshape(xq,[],1),reshape(yq,[],1),triangles,...               %
+%             n_triangles,n_dof);                                           %
+%     else                                                                  %
+%         [N_vec2, ~, ~, ~]=value_triangularBasis(...                          %
+%             reshape(xq,[],1),reshape(yq,[],1),numel(xq),triangles);       %
+%     end                                                                   %
+%     z2=reshape(N_vec2*v_X_n(:,s+1),size(xq));                             %
+% %     z2=reshape(N_vec2*[zeros(12,1);1;zeros(n_dof-1-12,1)],size(xq));    %
+%     mesh(xq,yq,z2)                                                        %
+%     vel_X_exact2=velocity_X_func(xq,yq,s*t_step);                         %
+%     L2_error=1/resol^2*sum(sum(abs(z2-vel_X_exact2)));                    %
+%     fprintf('The L2 error is %.1e ', L2_error);                           %
+%     end                                                                   %
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     
     %Displacement from initial position of the particles
     du_X_n = v_X_n(:,s+1)*t_step;
@@ -278,207 +698,84 @@ for s=1:n_time_steps-1
     u_Y_n(:,s+1) = u_Y_n(:,s) + du_X_n;
     
     %Calculate new strain, Eq 2.2 in Roel's thesis
-    dstrain_11_p = t_step*(B_vec_X*v_X_n(:,s+1));
-    dstrain_12_p = t_step*1/2*(B_vec_Y*v_X_n(:,s+1)+B_vec_X*v_Y_n(:,s+1));
-    dstrain_21_p = dstrain_12_p;
-    dstrain_22_p = t_step*(B_vec_Y*v_Y_n(:,s+1));
+    dstrain11_p = t_step*(B_vec_X*v_X_n(:,s+1));
+    dstrain12_p = t_step*1/2*(B_vec_Y*v_X_n(:,s+1)+...
+                              B_vec_X*v_Y_n(:,s+1));
+    dstrain21_p = dstrain12_p;
+    dstrain22_p = t_step*(B_vec_Y*v_Y_n(:,s+1));
     
-    strain_p(1,1,:,s+1)  = squeeze(strain_p(1,1,:,s)) + dstrain_11_p;
-    strain_p(1,2,:,s+1)  = squeeze(strain_p(1,2,:,s)) + dstrain_12_p;
-    strain_p(2,1,:,s+1)  = squeeze(strain_p(2,1,:,s)) + dstrain_21_p;
-    strain_p(2,2,:,s+1)  = squeeze(strain_p(2,2,:,s)) + dstrain_22_p;
+    strain11_p(:,s+1)  = strain11_p(:,s) + dstrain11_p;
+    strain12_p(:,s+1)  = strain12_p(:,s) + dstrain12_p;
+    strain21_p(:,s+1)  = strain21_p(:,s) + dstrain21_p;
+    strain22_p(:,s+1)  = strain22_p(:,s) + dstrain22_p;
     
     %Calculate new stress. Eq 2.5 in Roel's thesis and 3.12 of MPM for
     %Geomechanical Problems
     %For 2D
     
     %First define the change due to Kirchhoff/Hill stress
-    dstress_11_H_p=(2*G+(K-2/3*G))*dstrain_11_p+...
-                   (    (K-2/3*G))*dstrain_22_p;
-    dstress_22_H_p=(    (K-2/3*G))*dstrain_11_p+...
-                   (2*G+(K-2/3*G))*dstrain_22_p;
-    dstress_12_H_p=(2*G          )*dstrain_12_p;
-    dstress_21_H_p=dstress_12_H_p;             
+    dstress11_H_p=(2*G+(K-2/3*G))*dstrain11_p+...
+                  (    (K-2/3*G))*dstrain22_p;
+    dstress22_H_p=(    (K-2/3*G))*dstrain11_p+...
+                  (2*G+(K-2/3*G))*dstrain22_p;
+    dstress12_H_p=(2*G          )*dstrain12_p;
+    dstress21_H_p=dstress12_H_p;             
     
     %Calculate spin tensor, the antisymmetric part of the velocity gradient
     %tensor (eq 3.13) of MPM for Geomechanical Problems
-    w_spin_11=zeros(n_particles,1);
-    w_spin_12=t_step*1/2*(B_vec_Y*v_X_n(:,s+1)-B_vec_X*v_Y_n(:,s+1));
+    w_spin_11=sparse(n_particles,1);
+    w_spin_12=t_step*1/2*(B_vec_Y*v_X_n(:,s+1)-...
+                          B_vec_X*v_Y_n(:,s+1) );
     w_spin_21=-w_spin_12;
-    w_spin_22=zeros(n_particles,1);
+    w_spin_22=sparse(n_particles,1);
 
-    dstress_11_p=dstress_11_H_p ...
-        -(dstrain_11_p+dstrain_22_p).*squeeze(stress_p(1,1,:,s)) ...
-        + ( w_spin_11.*squeeze(stress_p(1,1,:,s)) + ...
-            w_spin_12.*squeeze(stress_p(2,1,:,s)) ) ...
-        - ( squeeze(stress_p(1,1,:,s)).*w_spin_11 + ...
-            squeeze(stress_p(1,2,:,s)).*w_spin_21 );
-    dstress_12_p=dstress_12_H_p ...
-        -(dstrain_11_p+dstrain_22_p).*squeeze(stress_p(1,2,:,s)) ...
-        + ( w_spin_11.*squeeze(stress_p(1,2,:,s)) + ...
-            w_spin_12.*squeeze(stress_p(2,2,:,s)) ) ...
-        - ( squeeze(stress_p(1,1,:,s)).*w_spin_12 + ...
-            squeeze(stress_p(1,2,:,s)).*w_spin_22 );
-    dstress_21_p=dstress_21_H_p ...
-        -(dstrain_11_p+dstrain_22_p).*squeeze(stress_p(2,1,:,s)) ...
-        + ( w_spin_21.*squeeze(stress_p(1,1,:,s)) + ...
-            w_spin_22.*squeeze(stress_p(2,1,:,s)) ) ...
-        - ( squeeze(stress_p(2,1,:,s)).*w_spin_11 + ...
-            squeeze(stress_p(2,2,:,s)).*w_spin_21 );
-    dstress_22_p=dstress_22_H_p ...
-        -(dstrain_11_p+dstrain_22_p).*squeeze(stress_p(2,2,:,s)) ...
-        + ( w_spin_21.*squeeze(stress_p(1,2,:,s)) + ...
-            w_spin_22.*squeeze(stress_p(2,2,:,s)) ) ...
-        - ( squeeze(stress_p(2,1,:,s)).*w_spin_12 + ...
-            squeeze(stress_p(2,2,:,s)).*w_spin_22 );
-    
-    stress_p(1,1,:,s+1) = squeeze(stress_p(1,1,:,s)) + dstress_11_p;
-    stress_p(1,2,:,s+1) = squeeze(stress_p(1,2,:,s)) + dstress_12_p;
-    stress_p(2,1,:,s+1) = squeeze(stress_p(2,1,:,s)) + dstress_21_p;
-    stress_p(2,2,:,s+1) = squeeze(stress_p(2,2,:,s)) + dstress_22_p;
-    
-    
-    %VRAAG ROEL OVER PAGINA 14, TWEEDE VERGELIJKING (OVER STRESS)
-    
-    
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    
-%     %For 3D, strain to stress, see wikipedia, Hooke's law for a
-%     %conversion matrix
-%     dstress_11_H_p=(2*G+(K-2/3*G))*dstrain_11_p+ ...
-%                  (    (K-2/3*G))*dstrain_22_p+ ...
-%                  (    (K-2/3*G))*dstrain_33_p;
-%     dstress_22_H_p=(    (K-2/3*G))*dstrain_11_p+ ...
-%                  (2*G+(K-2/3*G))*dstrain_22_p+ ...
-%                  (    (K-2/3*G))*dstrain_33_p;
-%     dstress_33_H_p=(    (K-2/3*G))*dstrain_11_p+ ...
-%                  (    (K-2/3*G))*dstrain_22_p+ ...
-%                  (2*G+(K-2/3*G))*dstrain_33_p;
-%     dstress_12_H_p=(2*G          )*dstrain_12_p;
-%     dstress_13_H_p=(2*G          )*dstrain_13_p;
-%     dstress_23_H_p=(2*G          )*dstrain_23_p;
-%     dstress_21_H_p=dstress_12_H_p;   
-%     dstress_31_H_p=dstress_13_H_p;   
-%     dstress_32_H_p=dstress_23_H_p
-%     
-%     %Calculate spin tensor, the antisymmetric part of the velocity gradient
-%     %tensor (eq 3.13) of MPM for Geomechanical Problems
-%     w_spin_11=zeros(n_particles,1);
-%     w_spin_12=t_step*1/2*(B_vec_Y*v_X_n(:,s+1)-B_vec_X*v_Y_n(:,s+1));
-%     w_spin_13=t_step*1/2*(B_vec_Z*v_X_n(:,s+1)-B_vec_X*v_Z_n(:,s+1));
-%     w_spin_21=-w_spin_12;
-%     w_spin_22=zeros(n_particles,1);
-%     w_spin_23=t_step*1/2*(B_vec_Z*v_Y_n(:,s+1)-B_vec_Y*v_Z_n(:,s+1));
-%     w_spin_31=-w_spin_13;
-%     w_spin_32=-w_spin_23;
-%     w_spin_33=zeros(n_particles,1);
-%     
-%     dstress_11_p=dstress_11_H_p ...
-%         -(dstrain_11_p+dstrain_22_p+dstrain_33_p)...
-%             .*squeeze(stress_p(1,1,:,s)) ...
-%         + ( w_spin_11.*squeeze(stress_p(1,1,:,s)) + ...
-%             w_spin_12.*squeeze(stress_p(2,1,:,s)) + ...
-%             w_spin_13.*squeeze(stress_p(3,1,:,s)) ) ...
-%         - ( squeeze(stress_p(1,1,:,s)).*w_spin_11 + ...
-%             squeeze(stress_p(1,2,:,s)).*w_spin_21 + ...
-%             squeeze(stress_p(1,3,:,s)).*w_spin_31 );
-%     dstress_12_p=dstress_12_H_p ...
-%         -(dstrain_11_p+dstrain_22_p+dstrain_33_p)...
-%             .*squeeze(stress_p(1,2,:,s)) ...
-%         + ( w_spin_11.*squeeze(stress_p(1,2,:,s)) + ...
-%             w_spin_12.*squeeze(stress_p(2,2,:,s)) + ...
-%             w_spin_13.*squeeze(stress_p(3,2,:,s)) ) ...
-%         - ( squeeze(stress_p(1,1,:,s)).*w_spin_12 + ...
-%             squeeze(stress_p(1,2,:,s)).*w_spin_22 + ...
-%             squeeze(stress_p(1,3,:,s)).*w_spin_32 );
-%     dstress_13_p=dstress_13_H_p ...
-%         -(dstrain_11_p+dstrain_22_p+dstrain_33_p)...
-%             .*squeeze(stress_p(1,3,:,s)) ...
-%         + ( w_spin_11.*squeeze(stress_p(1,3,:,s)) + ...
-%             w_spin_12.*squeeze(stress_p(2,3,:,s)) + ...
-%             w_spin_13.*squeeze(stress_p(3,3,:,s)) ) ...
-%         - ( squeeze(stress_p(1,1,:,s)).*w_spin_13 + ...
-%             squeeze(stress_p(1,2,:,s)).*w_spin_23 + ...
-%             squeeze(stress_p(1,3,:,s)).*w_spin_33 );
-%     dstress_21_p=dstress_21_H_p ...
-%         -(dstrain_11_p+dstrain_22_p+dstrain_33_p)...
-%             .*squeeze(stress_p(2,1,:,s)) ...
-%         + ( w_spin_21.*squeeze(stress_p(1,1,:,s)) + ...
-%             w_spin_22.*squeeze(stress_p(2,1,:,s)) + ...
-%             w_spin_23.*squeeze(stress_p(3,1,:,s)) ) ...
-%         - ( squeeze(stress_p(2,1,:,s)).*w_spin_11 + ...
-%             squeeze(stress_p(2,2,:,s)).*w_spin_21 + ...
-%             squeeze(stress_p(2,3,:,s)).*w_spin_31 );
-%     dstress_22_p=dstress_22_H_p ...
-%         -(dstrain_11_p+dstrain_22_p+dstrain_33_p)...
-%             .*squeeze(stress_p(2,2,:,s)) ...
-%         + ( w_spin_21.*squeeze(stress_p(1,2,:,s)) + ...
-%             w_spin_22.*squeeze(stress_p(2,2,:,s)) + ...
-%             w_spin_23.*squeeze(stress_p(3,2,:,s)) ) ...
-%         - ( squeeze(stress_p(2,1,:,s)).*w_spin_12 + ...
-%             squeeze(stress_p(2,2,:,s)).*w_spin_22 + ...
-%             squeeze(stress_p(2,3,:,s)).*w_spin_32 );
-%     dstress_23_p=dstress_23_H_p ...
-%         -(dstrain_11_p+dstrain_22_p+dstrain_33_p)...
-%             .*squeeze(stress_p(2,3,:,s)) ...
-%         + ( w_spin_21.*squeeze(stress_p(1,3,:,s)) + ...
-%             w_spin_22.*squeeze(stress_p(2,3,:,s)) + ...
-%             w_spin_23.*squeeze(stress_p(3,3,:,s)) ) ...
-%         - ( squeeze(stress_p(2,1,:,s)).*w_spin_13 + ...
-%             squeeze(stress_p(2,2,:,s)).*w_spin_23 + ...
-%             squeeze(stress_p(2,3,:,s)).*w_spin_33 );        
-%     dstress_31_p=dstress_31_H_p ...
-%         -(dstrain_11_p+dstrain_22_p+dstrain_33_p)...
-%             .*squeeze(stress_p(3,1,:,s)) ...
-%         + ( w_spin_31.*squeeze(stress_p(1,1,:,s)) + ...
-%             w_spin_32.*squeeze(stress_p(2,1,:,s)) + ...
-%             w_spin_33.*squeeze(stress_p(3,1,:,s)) ) ...
-%         - ( squeeze(stress_p(3,1,:,s)).*w_spin_11 + ...
-%             squeeze(stress_p(3,2,:,s)).*w_spin_21 + ...
-%             squeeze(stress_p(3,3,:,s)).*w_spin_31 );
-%     dstress_32_p=dstress_32_H_p ...
-%         -(dstrain_11_p+dstrain_22_p+dstrain_33_p)...
-%             .*squeeze(stress_p(3,2,:,s)) ...
-%         + ( w_spin_31.*squeeze(stress_p(1,2,:,s)) + ...
-%             w_spin_32.*squeeze(stress_p(2,2,:,s)) + ...
-%             w_spin_33.*squeeze(stress_p(3,2,:,s)) ) ...
-%         - ( squeeze(stress_p(3,1,:,s)).*w_spin_12 + ...
-%             squeeze(stress_p(3,2,:,s)).*w_spin_22 + ...
-%             squeeze(stress_p(3,3,:,s)).*w_spin_32 );
-%     dstress_33_p=dstress_33_H_p ...
-%         -(dstrain_11_p+dstrain_22_p+dstrain_33_p)...
-%             .*squeeze(stress_p(3,3,:,s)) ...
-%         + ( w_spin_31.*squeeze(stress_p(1,3,:,s)) + ...
-%             w_spin_32.*squeeze(stress_p(2,3,:,s)) + ...
-%             w_spin_33.*squeeze(stress_p(3,3,:,s)) ) ...
-%         - ( squeeze(stress_p(3,1,:,s)).*w_spin_13 + ...
-%             squeeze(stress_p(3,2,:,s)).*w_spin_23 + ...
-%             squeeze(stress_p(3,3,:,s)).*w_spin_33 );
-% 
-%     stress_p(1,1,:,s+1) = stress_p(1,1,:,s) + dstress_11_p;
-%     stress_p(1,2,:,s+1) = stress_p(1,2,:,s) + dstress_12_p;
-%     stress_p(1,3,:,s+1) = stress_p(1,3,:,s) + dstress_13_p;
-%     stress_p(2,1,:,s+1) = stress_p(2,1,:,s) + dstress_21_p;
-%     stress_p(2,2,:,s+1) = stress_p(2,2,:,s) + dstress_22_p;    
-%     stress_p(2,3,:,s+1) = stress_p(2,3,:,s) + dstress_23_p;    
-%     stress_p(3,1,:,s+1) = stress_p(3,1,:,s) + dstress_31_p;
-%     stress_p(3,2,:,s+1) = stress_p(3,2,:,s) + dstress_32_p;
-%     stress_p(3,3,:,s+1) = stress_p(3,3,:,s) + dstress_33_p;
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    dstress11_p=dstress11_H_p ...
+        -(dstrain11_p+dstrain22_p).*stress11_p(:,s) ...
+        + ( w_spin_11.*stress11_p(:,s) + ...
+            w_spin_12.*stress21_p(:,s) ) ...
+        - ( stress11_p(:,s).*w_spin_11 + ...
+            stress12_p(:,s).*w_spin_21 );
+    dstress12_p=dstress12_H_p ...
+        -(dstrain11_p+dstrain22_p).*stress12_p(:,s) ...
+        + ( w_spin_11.*stress12_p(:,s) + ...
+            w_spin_12.*stress22_p(:,s) ) ...
+        - ( stress11_p(:,s).*w_spin_12 + ...
+            stress12_p(:,s).*w_spin_22 );
+    dstress21_p=dstress21_H_p ...
+        -(dstrain11_p+dstrain22_p).*stress21_p(:,s) ...
+        + ( w_spin_21.*stress11_p(:,s) + ...
+            w_spin_22.*stress21_p(:,s) ) ...
+        - ( stress21_p(:,s).*w_spin_11 + ...
+            stress22_p(:,s).*w_spin_21 );
+    dstress22_p=dstress22_H_p ...
+        -(dstrain11_p+dstrain22_p).*stress22_p(:,s) ...
+        + ( w_spin_21.*stress12_p(:,s) + ...
+            w_spin_22.*stress22_p(:,s) ) ...
+        - ( stress21_p(:,s).*w_spin_12 + ...
+            stress22_p(:,s).*w_spin_22 );
+        
+    stress11_p(:,s+1) = stress11_p(:,s) + dstress11_p;
+    stress12_p(:,s+1) = stress12_p(:,s) + dstress12_p;
+    stress21_p(:,s+1) = stress21_p(:,s) + dstress21_p;
+    stress22_p(:,s+1) = stress22_p(:,s) + dstress22_p;
     
     % Update particle displacement
-    u_X_p(:,s+1) = u_X_p(:,s) + N_vec*du_X_n;
-    u_Y_p(:,s+1) = u_Y_p(:,s) + N_vec*du_Y_n;
+    du_X_p = N_vec*du_X_n;
+    du_Y_p = N_vec*du_Y_n;
     
+    u_X_p(:,s+1) = u_X_p(:,s) + du_X_p;
+    u_Y_p(:,s+1) = u_Y_p(:,s) + du_Y_p;
+        
     %Update particle positions
-    particles_X(:,s+1) = particles_X(:,s) + N_vec*du_X_n;
-    particles_Y(:,s+1) = particles_Y(:,s) + N_vec*du_Y_n;
+    particles_X(:,s+1) = particles_X(:,s) + du_X_p;
+    particles_Y(:,s+1) = particles_Y(:,s) + du_Y_p;
     
     % Update the volume and density of the particles
-    volume_p  = (1 + dstrain_11_p+dstrain_22_p).*volume_p;
-    density_p = density_p./(1 + dstrain_11_p + dstrain_22_p);
+    volume_p(:,s+1)  = (1 + dstrain11_p+dstrain22_p).*volume_p(:,s);
+    density_p = density_p./(1 + dstrain11_p + dstrain22_p);
     
     % Update weights for integration (= volume)
-    area_weight = volume_p;
+    area_weight = volume_p(:,s+1);
     
     % Determine the kinetic and potential energy of the system
     E_kin_X(1,s+1)=0.5*(sum(M,1)*v_X_n(:,s+1).^2);
@@ -496,21 +793,13 @@ for s=1:n_time_steps-1
     E_grav(1,s+1) = E_grav(1,s+1) + F_grav_X_n'*u_X_n(:,s+1);    
 end
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+% %Check the interpolation to the Gauss points
+% if flag.Gauss_integration == 1
+%     figure;
+%     hold on;  
+%     scatter3(particles_X(:,s),particles_Y(:,s),stress11_p(:,s));
+%     scatter3(GaussPoints_X,GaussPoints_Y,stress11_gp,'r')
+% end
 
 
 

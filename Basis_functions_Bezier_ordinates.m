@@ -2,8 +2,8 @@
 % Input: X and Y locations vertices of tiangles (V_X,V_Y) and the triangles
 % (Tri) Output: The X and Y locations of  the Powell-Sabin triangles (Q_X,
 % Q_Y), the 3D matrix with the X and Y locations of the Bezier Ordinates
-% (B_O_X, B_O_Y). These are defines as B_O_n(triangle,i,j), where n can be
-% X or Y, and B_O_n denotes the location of the Bezier ordinate in main
+% (B_o_X, B_o_Y). These are defined as B_o_n(triangle,i,j), where n can be
+% X or Y, and B_o_n denotes the location of the Bezier ordinate in main
 % triangle 'triangle', of which subtriangle 'i' (counted counterclockwise,
 % starting with the subtriangle with the following three vertices: the
 % first vertex of the main triangle, the center vertex of the main triangle
@@ -11,18 +11,18 @@
 % vertices. Then j denotes which location at in this subtriangle, counting
 % counterclockwise, always starting at the location at the center vertex of
 % the main triangle.
-% Finally, B_O is a 5D matrix B_O(V,p,tri,i,j), denoting the
+% Finally, B_o is a 5D matrix B_O(V,p,tri,i,j), denoting the
 % Bezier ordinates of the basis function of main vertex V, of which basis
 % function p (1,2 or 3), at the location of main triangle tri, and i and j
 % defining subtriangle i, of which location j, identically to B_O_n.
 
 function [Q_X,Q_Y,B_o_X,B_o_Y,B_o] = ...
-    Basis_functions_Bezier_ordinates(V_X,V_Y,triangles)
+    Basis_functions_Bezier_ordinates(V_X,V_Y,triangles,flag)
 
 %% Construct Powell Sabin refinement
 
 %Allow figures to be plotted
-fig=1;
+fig=0;
 
 Num_Tri=size(triangles,1);
 Tri_nb = neighbors(triangles);
@@ -31,10 +31,15 @@ Num_Ver=length(V_X);
 %Generate points in the center of each triangle with incenter, which is the
 %intersection point of the three bisectors of the angles of the triangle. 
 %http://mathworld.wolfram.com/Incenter.html
-V_c=incenter(triangles);
-V_c_X=V_c(:,1);
-V_c_Y=V_c(:,2);
-
+if flag.grid_regularity==1
+    V_c_X=mean(V_X(triangles.ConnectivityList),2);
+    V_c_Y=mean(V_Y(triangles.ConnectivityList),2);
+    V_c=[V_c_X,V_c_Y];
+else
+    V_c=incenter(triangles);
+    V_c_X=V_c(:,1);
+    V_c_Y=V_c(:,2);
+end
 if fig==1
     figure(1)
     hold on
@@ -270,7 +275,8 @@ for v=1:Num_Ver     %loop over triangles
             end
         end
     end
-    
+
+%     %Uncomment for the location of the PS-triangle vertices
     if fig==1
         scatter(Q_X(v,:),Q_Y(v,:),'filled')
     end
@@ -451,6 +457,7 @@ for v=1:Num_Ver
     end
 end
 
+B_o(B_o<0)=0;
 clear a b B_O_temp BC_c BC_edge beta_bar c gamma_bar ind ind_v L ...
     L_prime L_tilde lambda1 lambda2 mu2 mu3 nu1 nu3 q t tr tri_v v ...
     x1 x2 x3 y1 y2 y3 Num_tri

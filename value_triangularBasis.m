@@ -3,44 +3,58 @@
 % Output: Value of material points in basis functions and value of the
 % derivative to X and Y of the basis functions in the material points
 
-function [N_vec, B_vec_X, B_vec_Y] = ...
-    value_triangularBasis(particles_X,particles_Y,n_particles,triangles)
+function [N_vec, B_vec_X, B_vec_Y, nodes_active, triangles_active] = ...
+    value_triangularBasis(particles_X,particles_Y,triangles)
 %%
 n_vertices=size(triangles.Points,1);
+n_particles=numel(particles_X);
 
-N_vec  =zeros(n_particles,n_vertices);
-B_vec_X=zeros(n_particles,n_vertices);
-B_vec_Y=zeros(n_particles,n_vertices);
+% N_vec  =zeros(n_particles,n_vertices);
+% B_vec_X=zeros(n_particles,n_vertices);
+% B_vec_Y=zeros(n_particles,n_vertices);
 
-[point_loc,bary_coords] = pointLocation(triangles,particles_X,particles_Y);
+%List with particles with nonzero entries 
+p_temp=repmat(1:n_particles,3,1);
+p=reshape(p_temp,3*n_particles,1);
 
-for i=1:n_particles
-    N_vec(i,triangles.ConnectivityList(point_loc(i),:))=bary_coords(i,:);
-    
-    %The barycentric coordinates expressed in x and y (source:
-    %https://en.wikipedia.org/wiki/Barycentric_coordinate_system)
-    %eta1=((y2-y3)(x-x3)+(x3-x2)(y-y3))/((y2-y3)(x1-x3)+(x3-x2)(y1-y3))
-    %eta2=((y3-y1)(x-x3)+(x1-x3)(y-y3))/((y2-y3)(x1-x3)+(x3-x2)(y1-y3))
-    %eta3=1-eta1-eta2
-    %From these the derivatives to x and y can easily be derived
-    
-    %x and y locations of the vertices of the current triangle
-    x=triangles.Points(triangles.ConnectivityList(point_loc(i),:),1);
-    y=triangles.Points(triangles.ConnectivityList(point_loc(i),:),2);
-    det=(y(2)-y(3))*(x(1)-x(3))+(x(3)-x(2))*(y(1)-y(3));
-    
-    B_vec_X(i,triangles.ConnectivityList(point_loc(i),1))=...
-        (y(2)-y(3))/det;
-    B_vec_Y(i,triangles.ConnectivityList(point_loc(i),1))=...
-        (x(3)-x(2))/det;
-    
-    B_vec_X(i,triangles.ConnectivityList(point_loc(i),2))=...
-        (y(3)-y(1))/det;
-    B_vec_Y(i,triangles.ConnectivityList(point_loc(i),2))=...
-        (x(1)-x(3))/det;
-    
-    B_vec_X(i,triangles.ConnectivityList(point_loc(i),3))=...
-        (y(1)-y(2))/det;
-    B_vec_Y(i,triangles.ConnectivityList(point_loc(i),3))=...
-        (x(2)-x(1))/det;
+[p_tr,BC] = pointLocation(triangles,particles_X,particles_Y);
+n=triangles.ConnectivityList(p_tr,:);
+n=reshape(n',3*n_particles,1);
+% p_tr=reshape(repmat(p_tr,1,3)',3*n_particles,1);
+
+nodes_active = unique(n);
+triangles_active = unique(p_tr);
+%Check if any particles are outside the domain
+if (sum(isnan(p_tr))~=0)
+    disp('Particle outside domain')
+end
+
+N_vec = reshape(BC',3*n_particles,1);
+N_vec = sparse(p,n,N_vec,n_particles,n_vertices);
+
+V_X=triangles.Points(:,1);
+V_Y=triangles.Points(:,2);
+V1_X=V_X(triangles.ConnectivityList(p_tr,1));
+V2_X=V_X(triangles.ConnectivityList(p_tr,2));
+V3_X=V_X(triangles.ConnectivityList(p_tr,3));
+V1_Y=V_Y(triangles.ConnectivityList(p_tr,1));
+V2_Y=V_Y(triangles.ConnectivityList(p_tr,2));
+V3_Y=V_Y(triangles.ConnectivityList(p_tr,3));
+
+denom=( ( V2_Y-V3_Y ).*( V1_X-V3_X ) + ( V3_X-V2_X ).*( V1_Y-V3_Y ) );
+
+deta1_dx=(V2_Y-V3_Y)./denom;
+deta2_dx=(V3_Y-V1_Y)./denom;
+deta3_dx=(V1_Y-V2_Y)./denom;
+
+deta1_dy=(V3_X-V2_X)./denom;
+deta2_dy=(V1_X-V3_X)./denom;
+deta3_dy=(V2_X-V1_X)./denom;
+
+B_vec_X=reshape([deta1_dx,deta2_dx,deta3_dx]',3*n_particles,1);
+B_vec_Y=reshape([deta1_dy,deta2_dy,deta3_dy]',3*n_particles,1);
+
+B_vec_X=sparse(p,n,B_vec_X,n_particles,n_vertices);
+B_vec_Y=sparse(p,n,B_vec_Y,n_particles,n_vertices);
+
 end

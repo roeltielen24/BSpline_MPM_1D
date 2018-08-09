@@ -41,7 +41,7 @@ area_vertex_X=area_vertex_temp(list_in,1);
 area_vertex_Y=area_vertex_temp(list_in,2);
 
 %All the vertices outside the original domain will not be used anymore, and
-%therefore, will be discarded. New indices shall therefore be given. index 
+%are therefore discarded. New indices shall therefore be given. index
 %change contains the new index of each of the old indices. The vertices
 %outside the domain shall receive index 0, the rest will get index 1,2,3...
 index_change=1:size(area_vertex_temp,1);
@@ -72,3 +72,6 @@ end
 area_vertex_indices=area_vertex_indices(1:num_active_cells);
 
 end
+
+
+
